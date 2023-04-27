@@ -111,7 +111,7 @@ export const getBatchArguments = (
   model: string,
   gpuId: string,
   saveImageAs: string,
-  scale: string
+  scale: string,
 ) => {
   return [
     "-i",
