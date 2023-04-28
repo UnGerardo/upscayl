@@ -25,12 +25,14 @@ import {
   MessageBoxOptions,
 } from "electron";
 
-import { spawnUpscayl } from "./upscayl";
+// import { spawnUpscayl } from "./upscayl";
 import prepareNext from "electron-next";
 import isDev from "electron-is-dev";
 import commands from "./commands";
 
 import path from 'path';
+
+import { spawn } from "child_process";
 
 log.initialize({ preload: true });
 
@@ -523,83 +525,167 @@ ipcMain.on(commands.UPSCAYL, async (event, payload) => {
   }
 });
 
+export const spawnUpscayl = (binaryName: string, command: string[]) => {
+  console.log("ℹ Command: ", command);
+
+  const spawnedProcess = spawn(execPath(binaryName), command, {
+    cwd: undefined,
+    detached: false,
+  });
+
+  return {
+    process: spawnedProcess,
+    kill: () => spawnedProcess.kill(),
+  };
+};
+
 //------------------------Upscayl Folder-----------------------------//
 ipcMain.on(commands.FOLDER_UPSCAYL, async (event, payload) => {
+  let folders: string[] = fs.readdirSync(payload.batchFolderPath);
+  const folder: string = folders.shift() as string;
+
   // GET THE MODEL
   const model = payload.model;
   const gpuId = payload.gpuId;
   const saveImageAs = payload.saveImageAs;
   const scale = payload.scale as string;
 
-  
-  fs.readdir(payload.batchFolderPath, (err, files) => {
-    if (err) {
-      console.error(err)
-      return;
-    }
-    
-    files.forEach(file => {
-      console.log(file);
+  // GET THE IMAGE DIRECTORY
+  let inputDir = path.join(payload.batchFolderPath, folder);
 
-      // GET THE IMAGE DIRECTORY
-      let inputDir = path.join(payload.batchFolderPath, file);
+  // GET THE OUTPUT DIRECTORY
+  let outputDir = path.join(payload.batchFolderPath + '_ultramix_balanced', folder);
 
-      // GET THE OUTPUT DIRECTORY
-      let outputDir = path.join(payload.batchFolderPath + '_ultramix_balanced', file);
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
 
-      if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
-      }
+  const isDefaultModel = defaultModels.includes(model);
 
-      const isDefaultModel = defaultModels.includes(model);
+  // UPSCALE
+  const upscayl = spawnUpscayl(
+    "realesrgan",
+    getBatchArguments(
+      inputDir,
+      outputDir,
+      isDefaultModel ? modelsPath : customModelsFolderPath ?? modelsPath,
+      model,
+      gpuId,
+      saveImageAs,
+      scale
+    )
+  );
 
-      // UPSCALE
-      const upscayl = spawnUpscayl(
-        "realesrgan",
-        getBatchArguments(
-          inputDir,
-          outputDir,
-          isDefaultModel ? modelsPath : customModelsFolderPath ?? modelsPath,
-          model,
-          gpuId,
-          saveImageAs,
-          scale
-        )
-      );
-
-      let failed = false;
-      const onData = (data: any) => {
-        logit("🚀 => upscayl.stderr.on => stderr.toString()", data.toString());
-        data = data.toString();
-        mainWindow.webContents.send(
-          commands.FOLDER_UPSCAYL_PROGRESS,
-          data.toString()
-        );
-        if (data.includes("invalid gpu") || data.includes("failed")) {
-          failed = true;
-        }
-      };
-      const onError = (data: any) => {
-        mainWindow.webContents.send(
-          commands.FOLDER_UPSCAYL_PROGRESS,
-          data.toString()
-        );
-        failed = true;
-        return;
-      };
-      const onClose = () => {
-        if (failed !== true) {
-          logit("Done upscaling");
-          mainWindow.webContents.send(commands.FOLDER_UPSCAYL_DONE, outputDir);
-        }
-      };
-
-      upscayl.process.stderr.on("data", onData);
-      upscayl.process.on("error", onError);
-      upscayl.process.on("close", onClose);
-    });
+  upscayl.process.on('exit', () => {
+    upscal(payload, folders);
   })
+
+  let failed = false;
+  const onData = (data: any) => {
+    logit("🚀 => upscayl.stderr.on => stderr.toString()", data.toString());
+    data = data.toString();
+    mainWindow.webContents.send(
+      commands.FOLDER_UPSCAYL_PROGRESS,
+      data.toString()
+    );
+    if (data.includes("invalid gpu") || data.includes("failed")) {
+      failed = true;
+    }
+  };
+  const onError = (data: any) => {
+    mainWindow.webContents.send(
+      commands.FOLDER_UPSCAYL_PROGRESS,
+      data.toString()
+    );
+    failed = true;
+    return;
+  };
+  const onClose = () => {
+    if (failed !== true) {
+      logit("Done upscaling");
+      mainWindow.webContents.send(commands.FOLDER_UPSCAYL_DONE, outputDir);
+    }
+  };
+
+  upscayl.process.stderr.on("data", onData);
+  upscayl.process.on("error", onError);
+  upscayl.process.on("close", onClose);
 });
+
+const upscal = (payload, folders) => {
+  if (folders.length === 0 ) {
+    console.log("ALL DONE");
+    return;
+  }
+  const folder = folders.shift();
+
+  // GET THE MODEL
+  const model = payload.model;
+  const gpuId = payload.gpuId;
+  const saveImageAs = payload.saveImageAs;
+  const scale = payload.scale as string;
+
+  // GET THE IMAGE DIRECTORY
+  let inputDir = path.join(payload.batchFolderPath, folder);
+
+  // GET THE OUTPUT DIRECTORY
+  let outputDir = path.join(payload.batchFolderPath + '_ultramix_balanced', folder);
+
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  const isDefaultModel = defaultModels.includes(model);
+
+  // UPSCALE
+  const upscayl = spawnUpscayl(
+    "realesrgan",
+    getBatchArguments(
+      inputDir,
+      outputDir,
+      isDefaultModel ? modelsPath : customModelsFolderPath ?? modelsPath,
+      model,
+      gpuId,
+      saveImageAs,
+      scale
+    )
+  );
+
+  upscayl.process.on('exit', (code, signal) => {
+    upscal(payload, folders);
+  })
+
+  let failed = false;
+  const onData = (data: any) => {
+    logit("🚀 => upscayl.stderr.on => stderr.toString()", data.toString());
+    data = data.toString();
+    mainWindow.webContents.send(
+      commands.FOLDER_UPSCAYL_PROGRESS,
+      data.toString()
+    );
+    if (data.includes("invalid gpu") || data.includes("failed")) {
+      failed = true;
+    }
+  };
+  const onError = (data: any) => {
+    mainWindow.webContents.send(
+      commands.FOLDER_UPSCAYL_PROGRESS,
+      data.toString()
+    );
+    failed = true;
+    return;
+  };
+  const onClose = () => {
+    if (failed !== true) {
+      logit("Done upscaling");
+      mainWindow.webContents.send(commands.FOLDER_UPSCAYL_DONE, outputDir);
+    }
+  };
+
+  upscayl.process.stderr.on("data", onData);
+  upscayl.process.on("error", onError);
+  upscayl.process.on("close", onClose);
+}
 
 //------------------------Auto-Update Code-----------------------------//
 // ! AUTO UPDATE STUFF
