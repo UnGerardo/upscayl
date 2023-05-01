@@ -14,7 +14,6 @@ import { format } from "url";
 import fs from "fs";
 
 import { execPath, modelsPath } from "./binaries";
-
 // Packages
 import {
   BrowserWindow,
@@ -29,12 +28,34 @@ import {
 import prepareNext from "electron-next";
 import isDev from "electron-is-dev";
 import commands from "./commands";
+import { ChildProcessWithoutNullStreams } from "child_process";
+
+let childProcesses: {
+  process: ChildProcessWithoutNullStreams;
+  kill: () => boolean;
+}[] = [];
 
 import path from 'path';
 
 import { spawn } from "child_process";
 
 log.initialize({ preload: true });
+
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // $& means the whole matched string
+}
+
+// Path variables for file and folder selection
+let imagePath: string | undefined = undefined;
+let folderPath: string | undefined = undefined;
+let customModelsFolderPath: string | undefined = undefined;
+let outputFolderPath: string | undefined = undefined;
+let saveOutputFolder = false;
+
+let stopped = false;
+
+// Slashes for use in directory names
+const slash: string = getPlatform() === "win" ? "\\" : "/";
 
 // Prepare the renderer once the app is ready
 let mainWindow: BrowserWindow;
@@ -84,44 +105,53 @@ app.on("ready", async () => {
     autoUpdater.checkForUpdates();
   }
 
-  // // SAVE LAST IMAGE PATH TO LOCAL STORAGE
-  // mainWindow.webContents
-  //   .executeJavaScript('localStorage.getItem("lastImagePath");', true)
-  //   .then((lastImagePath: string | null) => {
-  //     if (lastImagePath && lastImagePath.length > 0) {
-  //       imagePath = lastImagePath;
-  //     }
-  //   });
+  // GET LAST IMAGE PATH TO LOCAL STORAGE
+  mainWindow.webContents
+    .executeJavaScript('localStorage.getItem("lastImagePath");', true)
+    .then((lastImagePath: string | null) => {
+      if (lastImagePath && lastImagePath.length > 0) {
+        imagePath = lastImagePath;
+      }
+    });
 
-  // // SAVE LAST FOLDER PATH TO LOCAL STORAGE
-  // mainWindow.webContents
-  //   .executeJavaScript('localStorage.getItem("lastFolderPath");', true)
-  //   .then((lastFolderPath: string | null) => {
-  //     if (lastFolderPath && lastFolderPath.length > 0) {
-  //       folderPath = lastFolderPath;
-  //     }
-  //   });
+  // GET LAST FOLDER PATH TO LOCAL STORAGE
+  mainWindow.webContents
+    .executeJavaScript('localStorage.getItem("lastFolderPath");', true)
+    .then((lastFolderPath: string | null) => {
+      if (lastFolderPath && lastFolderPath.length > 0) {
+        folderPath = lastFolderPath;
+      }
+    });
 
-  // // SAVE LAST CUSTOM MODELS FOLDER PATH TO LOCAL STORAGE
-  // mainWindow.webContents
-  //   .executeJavaScript(
-  //     'localStorage.getItem("lastCustomModelsFolderPath");',
-  //     true
-  //   )
-  //   .then((lastCustomModelsFolderPath: string | null) => {
-  //     if (lastCustomModelsFolderPath && lastCustomModelsFolderPath.length > 0) {
-  //       customModelsFolderPath = lastCustomModelsFolderPath;
-  //     }
-  //   });
+  // GET LAST CUSTOM MODELS FOLDER PATH TO LOCAL STORAGE
+  mainWindow.webContents
+    .executeJavaScript(
+      'localStorage.getItem("lastCustomModelsFolderPath");',
+      true
+    )
+    .then((lastCustomModelsFolderPath: string | null) => {
+      if (lastCustomModelsFolderPath && lastCustomModelsFolderPath.length > 0) {
+        customModelsFolderPath = lastCustomModelsFolderPath;
+      }
+    });
 
-  // // SAVE LAST CUSTOM MODELS FOLDER PATH TO LOCAL STORAGE
-  // mainWindow.webContents
-  //   .executeJavaScript('localStorage.getItem("lastOutputFolderPath");', true)
-  //   .then((lastOutputFolderPath: string | null) => {
-  //     if (lastOutputFolderPath && lastOutputFolderPath.length > 0) {
-  //       outputFolderPath = lastOutputFolderPath;
-  //     }
-  //   });
+  // GET LAST CUSTOM MODELS FOLDER PATH TO LOCAL STORAGE
+  mainWindow.webContents
+    .executeJavaScript('localStorage.getItem("lastOutputFolderPath");', true)
+    .then((lastOutputFolderPath: string | null) => {
+      if (lastOutputFolderPath && lastOutputFolderPath.length > 0) {
+        outputFolderPath = lastOutputFolderPath;
+      }
+    });
+
+  // GET LAST SAVE OUTPUT FOLDER (BOOLEAN) TO LOCAL STORAGE
+  mainWindow.webContents
+    .executeJavaScript('localStorage.getItem("rememberOutputFolder");', true)
+    .then((lastSaveOutputFolder: boolean | null) => {
+      if (lastSaveOutputFolder !== null) {
+        saveOutputFolder = lastSaveOutputFolder;
+      }
+    });
 });
 
 // Quit the app once all windows are closed
@@ -133,12 +163,6 @@ const logit = (...args: any) => {
   log.log(...args);
   mainWindow.webContents.send(commands.LOG, args.join(" "));
 };
-
-// Path variables for file and folder selection
-let imagePath: string | undefined = undefined;
-let folderPath: string | undefined = undefined;
-let customModelsFolderPath: string | undefined = undefined;
-let outputFolderPath: string | undefined = undefined;
 
 // Default models
 const defaultModels = [
@@ -163,16 +187,7 @@ ipcMain.handle(commands.SELECT_FILE, async () => {
     return null;
   } else {
     logit("Selected File Path: ", filePaths[0]);
-
     imagePath = filePaths[0];
-    // mainWindow.webContents
-    //   .executeJavaScript(
-    //     `localStorage.setItem("lastImagePath", "${imagePath}");`,
-    //     true
-    //   )
-    //   .then(() => {
-    //     logit(`Saved Last Image Path (${imagePath}) to Local Storage`);
-    //   });
 
     let isValid = false;
     // READ SELECTED FILES
@@ -219,14 +234,6 @@ ipcMain.handle(commands.SELECT_FOLDER, async (event, message) => {
   } else {
     logit("Selected Folder Path: ", folderPaths[0]);
     folderPath = folderPaths[0];
-    // mainWindow.webContents
-    //   .executeJavaScript(
-    //     `localStorage.setItem("lastImagePath", "${folderPath}");`,
-    //     true
-    //   )
-    //   .then(() => {
-    //     logit(`Saved Last Image Path (${folderPath}) to Local Storage`);
-    //   });
     return folderPaths[0];
   }
 });
@@ -321,11 +328,24 @@ ipcMain.on(commands.OPEN_FOLDER, async (event, payload) => {
   shell.openPath(payload);
 });
 
+//------------------------Stop Command-----------------------------//
+ipcMain.on(commands.STOP, async (event, payload) => {
+  stopped = true;
+
+  childProcesses.forEach((child) => {
+    child.kill();
+  });
+});
+
 //------------------------Double Upscayl-----------------------------//
 ipcMain.on(commands.DOUBLE_UPSCAYL, async (event, payload) => {
   const model = payload.model as string;
   let inputDir = (payload.imagePath.match(/(.*)[\/\\]/)[1] || "") as string;
   let outputDir = payload.outputPath as string;
+
+  if (saveOutputFolder === true && outputFolderPath) {
+    outputDir = outputFolderPath;
+  }
   const gpuId = payload.gpuId as string;
   const saveImageAs = payload.saveImageAs as string;
   const scale = payload.scale as string;
@@ -333,15 +353,11 @@ ipcMain.on(commands.DOUBLE_UPSCAYL, async (event, payload) => {
   const isDefaultModel = defaultModels.includes(model);
 
   // COPY IMAGE TO TMP FOLDER
-  const platform = getPlatform();
-  const fullfileName =
-    platform === "win"
-      ? (payload.imagePath.split("\\").slice(-1)[0] as string)
-      : (payload.imagePath.split("/").slice(-1)[0] as string);
+
+  const fullfileName = payload.imagePath.split(slash).slice(-1)[0] as string;
   const fileName = parse(fullfileName).name;
-  const fileExt = parse(fullfileName).ext;
   const outFile =
-    outputDir + "/" + fileName + "_upscayl_16x_" + model + "." + saveImageAs;
+    outputDir + slash + fileName + "_upscayl_16x_" + model + "." + saveImageAs;
 
   // UPSCALE
   let upscayl = spawnUpscayl(
@@ -358,6 +374,9 @@ ipcMain.on(commands.DOUBLE_UPSCAYL, async (event, payload) => {
     )
   );
 
+  childProcesses.push(upscayl);
+
+  stopped = false;
   let failed = false;
   let isAlpha = false;
   let failed2 = false;
@@ -375,6 +394,7 @@ ipcMain.on(commands.DOUBLE_UPSCAYL, async (event, payload) => {
       isAlpha = true;
     }
   };
+
   const onError = (data) => {
     data.toString();
     // SEND UPSCAYL PROGRESS TO RENDERER
@@ -383,6 +403,7 @@ ipcMain.on(commands.DOUBLE_UPSCAYL, async (event, payload) => {
     failed = true;
     return;
   };
+
   const onData2 = (data) => {
     // CONVERT DATA TO STRING
     data = data.toString();
@@ -393,6 +414,7 @@ ipcMain.on(commands.DOUBLE_UPSCAYL, async (event, payload) => {
       failed2 = true;
     }
   };
+
   const onError2 = (data) => {
     data.toString();
     // SEND UPSCAYL PROGRESS TO RENDERER
@@ -401,8 +423,9 @@ ipcMain.on(commands.DOUBLE_UPSCAYL, async (event, payload) => {
     failed2 = true;
     return;
   };
+
   const onClose2 = (code) => {
-    if (!failed2) {
+    if (!failed2 && !stopped) {
       logit("Done upscaling");
       mainWindow.webContents.send(
         commands.DOUBLE_UPSCAYL_DONE,
@@ -415,7 +438,7 @@ ipcMain.on(commands.DOUBLE_UPSCAYL, async (event, payload) => {
   upscayl.process.on("error", onError);
   upscayl.process.on("close", (code) => {
     // IF NOT FAILED
-    if (!failed) {
+    if (!failed && !stopped) {
       // UPSCALE
       let upscayl2 = spawnUpscayl(
         "realesrgan",
@@ -429,6 +452,8 @@ ipcMain.on(commands.DOUBLE_UPSCAYL, async (event, payload) => {
           scale
         )
       );
+
+      childProcesses.push(upscayl2);
 
       upscayl2.process.stderr.on("data", onData2);
       upscayl2.process.on("error", onError2);
@@ -446,7 +471,11 @@ ipcMain.on(commands.UPSCAYL, async (event, payload) => {
   const gpuId = payload.gpuId as string;
   const saveImageAs = payload.saveImageAs as string;
   let inputDir = (payload.imagePath.match(/(.*)[\/\\]/)[1] || "") as string;
-  let outputDir = payload.outputPath as string;
+  let outputDir = folderPath || (payload.outputPath as string);
+
+  if (saveOutputFolder === true && outputFolderPath) {
+    outputDir = outputFolderPath;
+  }
 
   const isDefaultModel = defaultModels.includes(model);
 
@@ -461,7 +490,7 @@ ipcMain.on(commands.UPSCAYL, async (event, payload) => {
 
   const outFile =
     outputDir +
-    "/" +
+    slash +
     fileName +
     "_upscayl_" +
     scale +
@@ -489,11 +518,15 @@ ipcMain.on(commands.UPSCAYL, async (event, payload) => {
       )
     );
 
+    childProcesses.push(upscayl);
+
+    stopped = false;
     let isAlpha = false;
     let failed = false;
 
     const onData = (data: string) => {
       logit("image upscayl: ", data.toString());
+      mainWindow.setProgressBar(parseFloat(data.slice(0, data.length)) / 100);
       data = data.toString();
       mainWindow.webContents.send(commands.UPSCAYL_PROGRESS, data.toString());
       if (data.includes("invalid gpu") || data.includes("failed")) {
@@ -510,8 +543,9 @@ ipcMain.on(commands.UPSCAYL, async (event, payload) => {
       return;
     };
     const onClose = () => {
-      if (failed !== true) {
+      if (!failed && !stopped) {
         logit("Done upscaling");
+        mainWindow.setProgressBar(-1);
         mainWindow.webContents.send(
           commands.UPSCAYL_DONE,
           isAlpha ? outFile + ".png" : outFile
@@ -556,6 +590,10 @@ ipcMain.on(commands.FOLDER_UPSCAYL, async (event, payload) => {
   // GET THE OUTPUT DIRECTORY
   let outputDir = path.join(payload.batchFolderPath + '_ultramix_balanced', folder);
 
+  if (saveOutputFolder === true && outputFolderPath) {
+    outputDir = outputFolderPath;
+  }
+
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
@@ -580,7 +618,15 @@ ipcMain.on(commands.FOLDER_UPSCAYL, async (event, payload) => {
     upscal(payload, folders);
   })
 
+  upscayl.process.on('exit', () => {
+    upscal(payload, folders);
+  })
+
+  childProcesses.push(upscayl);
+
+  stopped = false;
   let failed = false;
+
   const onData = (data: any) => {
     logit("🚀 => upscayl.stderr.on => stderr.toString()", data.toString());
     data = data.toString();
@@ -601,7 +647,7 @@ ipcMain.on(commands.FOLDER_UPSCAYL, async (event, payload) => {
     return;
   };
   const onClose = () => {
-    if (failed !== true) {
+    if (!failed && !stopped) {
       logit("Done upscaling");
       mainWindow.webContents.send(commands.FOLDER_UPSCAYL_DONE, outputDir);
     }
@@ -751,8 +797,8 @@ autoUpdater.on("update-downloaded", (event) => {
 //     ffmpeg.path,
 //     [
 //       "-i",
-//       inputDir + "/" + videoFileName,
-//       frameExtractionPath + "/" + "out%d.png",
+//       inputDir + slash + videoFileName,
+//       frameExtractionPath + slash + "out%d.png",
 //     ],
 //     {
 //       cwd: undefined,

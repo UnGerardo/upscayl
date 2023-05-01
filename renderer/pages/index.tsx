@@ -12,18 +12,15 @@ import SettingsTab from "../components/SettingsTab";
 import { useAtom } from "jotai";
 import { logAtom } from "../atoms/logAtom";
 import { modelsListAtom } from "../atoms/modelsListAtom";
-import {
-  batchModeAtom,
-  customModelsPathAtom,
-  scaleAtom,
-} from "../atoms/userSettingsAtom";
+import { batchModeAtom, scaleAtom } from "../atoms/userSettingsAtom";
+import useLog from "../components/hooks/useLog";
 
 const Home = () => {
   // STATES
   const [imagePath, SetImagePath] = useState("");
   const [upscaledImagePath, setUpscaledImagePath] = useState("");
   const [outputPath, setOutputPath] = useState("");
-  const [scaleFactor, setScaleFactor] = useState(4);
+  const [scaleFactor] = useState(4);
   const [progress, setProgress] = useState("");
   const [model, setModel] = useState("realesrgan-x4plus");
   const [loaded, setLoaded] = useState(false);
@@ -32,7 +29,7 @@ const Home = () => {
   const [batchFolderPath, setBatchFolderPath] = useState("");
   const [upscaledBatchFolderPath, setUpscaledBatchFolderPath] = useState("");
   const [doubleUpscayl, setDoubleUpscayl] = useState(false);
-  const [isVideo, setIsVideo] = useState(false);
+  const [isVideo] = useState(false);
   const [videoPath, setVideoPath] = useState("");
   const [upscaledVideoPath, setUpscaledVideoPath] = useState("");
   const [doubleUpscaylCounter, setDoubleUpscaylCounter] = useState(0);
@@ -46,9 +43,10 @@ const Home = () => {
   });
   const [selectedTab, setSelectedTab] = useState(0);
   const [logData, setLogData] = useAtom(logAtom);
-  const [customModelsPath, setCustomModelsPath] = useAtom(customModelsPathAtom);
   const [modelOptions, setModelOptions] = useAtom(modelsListAtom);
   const [scale] = useAtom(scaleAtom);
+
+  const { logit } = useLog();
 
   // (function () {
   //   let info = console.info;
@@ -58,11 +56,6 @@ const Home = () => {
   //     info.apply(this, args);
   //   };
   // })();
-
-  const addToLog = (data: string) => {
-    console.log("🚀 => file: index.tsx:52 => data:", data);
-    setLogData((prevLogData) => [...prevLogData, data]);
-  };
 
   // EFFECTS
   useEffect(() => {
@@ -82,12 +75,12 @@ const Home = () => {
           data.includes("encode")
             ? "ENCODING ERROR => "
             : "DECODING ERROR => " +
-                "This image is possibly corrupt or not supported by Upscayl. You could try converting the image into another format and upscaling again. Otherwise, make sure that the output path is correct and you have the proper write permissions for the directory. If not, then unfortuantely this image is not supported by Upscayl, sorry."
+                "This image is possibly corrupt or not supported by Upscayl, or your GPU drivers are acting funny (Did you check if your GPU is compatible and drivers are alright?). You could try converting the image into another format and upscaling again. Also make sure that the output path is correct and you have the proper write permissions for the directory. If not, then unfortuantely there's not much we can do to help, sorry."
         );
         resetImagePaths();
       } else if (data.includes("uncaughtException")) {
         alert(
-          "Upscayl encountered an error. Possibly, the upscayl binary failed to execute the commands properly. Try launching Upscayl using commandline through Terminal and see if you get any information. You can post an issue on Upscayl's GitHub repository for more help."
+          "Upscayl encountered an error. Possibly, the upscayl binary failed to execute the commands properly. Try checking the logs to see if you get any information. You can post an issue on Upscayl's GitHub repository for more help."
         );
         resetImagePaths();
       }
@@ -95,7 +88,7 @@ const Home = () => {
 
     // LOG
     window.electron.on(commands.LOG, (_, data: string) => {
-      addToLog(data);
+      logit(data);
     });
 
     // UPSCAYL PROGRESS
@@ -104,7 +97,7 @@ const Home = () => {
         setProgress(data);
       }
       handleErrors(data);
-      addToLog(data);
+      logit(data);
     });
 
     // FOLDER UPSCAYL PROGRESS
@@ -113,7 +106,7 @@ const Home = () => {
         setProgress(data);
       }
       handleErrors(data);
-      addToLog(data);
+      logit(data);
     });
 
     // DOUBLE UPSCAYL PROGRESS
@@ -125,7 +118,7 @@ const Home = () => {
         setProgress(data);
       }
       handleErrors(data);
-      addToLog(data);
+      logit(data);
     });
 
     // VIDEO UPSCAYL PROGRESS
@@ -134,21 +127,22 @@ const Home = () => {
         setProgress(data);
       }
       handleErrors(data);
-      addToLog(data);
+      logit(data);
     });
 
     // UPSCAYL DONE
     window.electron.on(commands.UPSCAYL_DONE, (_, data: string) => {
       setProgress("");
       setUpscaledImagePath(data);
-      addToLog(data);
+      logit("upscaledImagePath: ", upscaledImagePath);
+      logit(data);
     });
 
     // FOLDER UPSCAYL DONE
     window.electron.on(commands.FOLDER_UPSCAYL_DONE, (_, data: string) => {
       setProgress("");
       setUpscaledBatchFolderPath(data);
-      addToLog(data);
+      logit(data);
     });
 
     // DOUBLE UPSCAYL DONE
@@ -156,14 +150,14 @@ const Home = () => {
       setProgress("");
       setDoubleUpscaylCounter(0);
       setUpscaledImagePath(data);
-      addToLog(data);
+      logit(data);
     });
 
     // VIDEO UPSCAYL DONE
     window.electron.on(commands.UPSCAYL_VIDEO_DONE, (_, data: string) => {
       setProgress("");
       setUpscaledVideoPath(data);
-      addToLog(data);
+      logit(data);
     });
 
     // CUSTOM FOLDER LISTENER
@@ -196,6 +190,18 @@ const Home = () => {
 
     if (customModelsPath !== null) {
       window.electron.send(commands.GET_MODELS_LIST, customModelsPath);
+    }
+  }, []);
+
+  useEffect(() => {
+    const rememberOutputFolder = localStorage.getItem("rememberOutputFolder");
+    const lastOutputFolderPath = localStorage.getItem("lastOutputFolderPath");
+
+    if (rememberOutputFolder === "true") {
+      setOutputPath(lastOutputFolderPath);
+    } else {
+      setOutputPath("");
+      localStorage.removeItem("lastOutputFolderPath");
     }
   }, []);
 
@@ -244,6 +250,7 @@ const Home = () => {
       width: null,
       height: null,
     });
+
     setProgress("");
 
     SetImagePath("");
@@ -366,7 +373,6 @@ const Home = () => {
       }
 
       var dirname = filePath.match(/(.*)[\/\\]/)[1] || "";
-      console.log("🚀 => handleDrop => dirname", dirname);
       setOutputPath(dirname);
     }
   };
@@ -395,6 +401,10 @@ const Home = () => {
     var path = await window.electron.invoke(commands.SELECT_FOLDER);
     if (path !== null) {
       setOutputPath(path);
+      const rememberOutputFolder = localStorage.getItem("rememberOutputFolder");
+      if (rememberOutputFolder) {
+        localStorage.setItem("lastOutputFolderPath", path);
+      }
     } else {
       console.log("Getting output path from input file");
     }
@@ -457,6 +467,19 @@ const Home = () => {
     }
   };
 
+  const stopHandler = () => {
+    window.electron.send(commands.STOP);
+    resetImagePaths();
+  };
+
+  const formatPath = (path) => {
+    //USE REGEX TO GET THE FILENAME AND ENCODE IT INTO PROPER FORM IN ORDER TO AVOID ERRORS DUE TO SPECIAL CHARACTERS
+    return path.replace(
+      /([^/\\]+)$/i,
+      encodeURIComponent(path.match(/[^/\\]+$/i)[0])
+    );
+  };
+
   const allowedFileTypes = ["png", "jpg", "jpeg", "webp"];
   const allowedVideoFileTypes = ["webm", "mp4", "mkv"];
 
@@ -513,7 +536,6 @@ const Home = () => {
             selectImageHandler={selectImageHandler}
             selectFolderHandler={selectFolderHandler}
             handleModelChange={handleModelChange}
-            handleDrop={handleDrop}
             outputHandler={outputHandler}
             upscaylHandler={upscaylHandler}
             batchMode={batchMode}
@@ -522,13 +544,8 @@ const Home = () => {
             outputPath={outputPath}
             doubleUpscayl={doubleUpscayl}
             setDoubleUpscayl={setDoubleUpscayl}
-            model={model}
             setModel={setModel}
-            isVideo={isVideo}
-            setIsVideo={setIsVideo}
-            gpuId={gpuId}
             setGpuId={setGpuId}
-            saveImageAs={saveImageAs}
             setSaveImageAs={setSaveImageAs}
             dimensions={dimensions}
           />
@@ -537,8 +554,6 @@ const Home = () => {
         {selectedTab === 1 && (
           <SettingsTab
             batchMode={batchMode}
-            setBatchMode={setBatchMode}
-            imagePath={imagePath}
             setModel={setModel}
             gpuId={gpuId}
             setGpuId={setGpuId}
@@ -566,6 +581,7 @@ const Home = () => {
           <ProgressBar
             progress={progress}
             doubleUpscaylCounter={doubleUpscaylCounter}
+            stopHandler={stopHandler}
           />
         ) : null}
 
@@ -603,7 +619,11 @@ const Home = () => {
               <img
                 src={
                   "file://" +
-                  `${upscaledImagePath ? upscaledImagePath : imagePath}`
+                  `${
+                    upscaledImagePath
+                      ? formatPath(upscaledImagePath)
+                      : formatPath(imagePath)
+                  }`
                 }
                 onLoad={(e: any) => {
                   setDimensions({
@@ -660,7 +680,7 @@ const Home = () => {
                     </p>
 
                     <img
-                      src={"file://" + imagePath}
+                      src={"file:///" + formatPath(imagePath)}
                       alt="Original"
                       onMouseMove={handleMouseMove}
                       style={{
@@ -678,7 +698,7 @@ const Home = () => {
                       Upscayled
                     </p>
                     <img
-                      src={"file://" + upscaledImagePath}
+                      src={"file://" + formatPath(upscaledImagePath)}
                       alt="Upscayl"
                       style={{
                         objectFit: "contain",
